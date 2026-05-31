@@ -3,66 +3,90 @@
 <head>
     <meta charset="UTF-8">
     <title>Daylio Filter</title>
-
-    <!-- PapaParse -->
     <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
-
     <style>
+        *, *::before, *::after { box-sizing: border-box; }
+
         body {
             font-family: Arial, sans-serif;
             background: #1e1e1e;
-            color: white;
+            color: #e0e0e0;
             display: flex;
             justify-content: center;
             align-items: center;
-            height: 100vh;
+            min-height: 100vh;
+            margin: 0;
         }
 
         .container {
             background: #2b2b2b;
-            padding: 25px;
-            border-radius: 12px;
-            width: 400px;
-            box-shadow: 0 0 20px rgba(0,0,0,0.5);
+            padding: 30px;
+            border-radius: 14px;
+            width: 420px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
         }
 
         h1 {
             text-align: center;
+            margin: 0 0 24px;
+            font-size: 1.5rem;
+            color: #ffffff;
         }
 
         label {
             display: block;
-            margin-top: 15px;
+            margin-top: 16px;
+            font-size: 0.875rem;
+            color: #a0a0a0;
         }
 
-        input, button {
+        input[type="file"],
+        input[type="date"] {
             width: 100%;
-            margin-top: 5px;
-            padding: 8px;
-            border-radius: 6px;
-            border: none;
+            margin-top: 6px;
+            padding: 9px 12px;
+            border-radius: 8px;
+            border: 1px solid #444;
+            background: #3a3a3a;
+            color: #e0e0e0;
+            font-size: 0.9rem;
         }
 
-        input {
-            background: #3a3a3a;
-            color: white;
+        input[type="date"]::-webkit-calendar-picker-indicator {
+            filter: invert(0.8);
+        }
+
+        .date-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
         }
 
         button {
+            width: 100%;
+            margin-top: 22px;
+            padding: 10px;
+            border-radius: 8px;
+            border: none;
             background: #3b82f6;
             color: white;
+            font-size: 1rem;
             cursor: pointer;
-            margin-top: 15px;
+            transition: background 0.15s;
         }
 
-        button:hover {
-            background: #2563eb;
-        }
+        button:hover { background: #2563eb; }
+        button:disabled { background: #555; cursor: default; }
 
         #status {
-            margin-top: 15px;
+            margin-top: 14px;
             text-align: center;
+            font-size: 0.9rem;
+            min-height: 1.4em;
         }
+
+        #status.error { color: #f87171; }
+        #status.success { color: #86efac; }
     </style>
 </head>
 <body>
@@ -70,83 +94,131 @@
 <div class="container">
     <h1>Daylio Filter</h1>
 
-    <label>CSV File:</label>
+    <label>CSV File</label>
     <input type="file" id="fileInput" accept=".csv">
 
-    <label>Start Date:</label>
-    <input type="date" id="startDate">
+    <div class="date-row">
+        <div>
+            <label>Start Date</label>
+            <input type="date" id="startDate">
+        </div>
+        <div>
+            <label>End Date</label>
+            <input type="date" id="endDate">
+        </div>
+    </div>
 
-    <label>End Date:</label>
-    <input type="date" id="endDate">
-
-    <button onclick="processFile()">Process</button>
-
+    <button id="processBtn" onclick="processFile()">Process</button>
     <div id="status"></div>
 </div>
 
 <script>
-function processFile() {
-    const fileInput = document.getElementById("fileInput");
-    const startDateInput = document.getElementById("startDate").value;
-    const endDateInput = document.getElementById("endDate").value;
-    const status = document.getElementById("status");
-
-    if (!fileInput.files.length) {
-        status.innerText = "Please select a CSV file.";
-        return;
+    /**
+     * Sets the status message displayed below the button.
+     * @param {string} message - Text to display.
+     * @param {'success'|'error'|''} type - Controls text color.
+     */
+    function setStatus(message, type = '') {
+        const el = document.getElementById('status');
+        el.textContent = message;
+        el.className = type;
     }
 
-    const file = fileInput.files[0];
-    const start = startDateInput ? new Date(startDateInput) : null;
-    const end = endDateInput ? new Date(endDateInput) : new Date();
+    /**
+     * Parses an ISO-format date string (YYYY-MM-DD) into a local Date object.
+     * Using the Date constructor directly with an ISO string returns UTC midnight,
+     * which causes off-by-one errors on date comparisons in local timezones.
+     *
+     * @param {string} isoString - A date string in "YYYY-MM-DD" format.
+     * @returns {Date} A Date set to local midnight on that day.
+     */
+    function parseLocalDate(isoString) {
+        const [year, month, day] = isoString.split('-').map(Number);
+        return new Date(year, month - 1, day);
+    }
 
-    Papa.parse(file, {
-        header: true,
-        skipEmptyLines: true,
-        complete: function(results) {
-            try {
-                const data = results.data;
+    /**
+     * Reads the selected CSV, filters rows by date range, and triggers a
+     * pipe-delimited CSV download of the matching date+note pairs.
+     */
+    function processFile() {
+        const fileInput = document.getElementById('fileInput');
+        const startValue = document.getElementById('startDate').value;
+        const endValue = document.getElementById('endDate').value;
 
-                const filtered = data
-                    .map(row => {
-                        const [day, month, year] = row.full_date.split("-");
-                        const date = new Date(year, month - 1, day);
-
-                        return {
-                            date: date,
-                            note: (row.note || "").replaceAll("<br>", "\n")
-                        };
-                    })
-                    .filter(item => {
-                        if (!start) return item.date <= end;
-                        return item.date >= start && item.date <= end;
-                    });
-
-                downloadCSV(filtered);
-                status.innerText = "Done ✅";
-
-            } catch (e) {
-                status.innerText = "Error: " + e;
-            }
+        if (!fileInput.files.length) {
+            setStatus('Please select a CSV file.', 'error');
+            return;
         }
-    });
-}
 
-function downloadCSV(data) {
-    const rows = data.map(n =>
-        `${n.date.toISOString().slice(0,10)}|${n.note.replace(/\n/g, " ")}`
-    );
+        const start = startValue ? parseLocalDate(startValue) : null;
+        const end   = endValue   ? parseLocalDate(endValue)   : new Date();
 
-    const content = "date|note\n" + rows.join("\n");
+        if (start && start > end) {
+            setStatus('Start date must be before end date.', 'error');
+            return;
+        }
 
-    const blob = new Blob([content], { type: "text/csv" });
-    const url = URL.createObjectURL(blob);
+        setStatus('Processing…');
+        document.getElementById('processBtn').disabled = true;
 
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "filtered.csv";
-    a.click();
-}
+        Papa.parse(fileInput.files[0], {
+            header: true,
+            skipEmptyLines: true,
+            complete({ data, errors }) {
+                document.getElementById('processBtn').disabled = false;
+
+                if (errors.length) {
+                    setStatus(`Parse error: ${errors[0].message}`, 'error');
+                    return;
+                }
+
+                try {
+                    const filtered = data
+                        .map(row => ({
+                            date: parseLocalDate(row.full_date),
+                            note: (row.note || '').replaceAll('<br>', '\n'),
+                        }))
+                        .filter(({ date }) => {
+                            const afterStart = !start || date >= start;
+                            const beforeEnd  = date <= end;
+                            return afterStart && beforeEnd;
+                        });
+
+                    downloadCSV(filtered);
+                    setStatus(`Done ✅  —  ${filtered.length} entries written.`, 'success');
+                } catch (err) {
+                    setStatus(`Error: ${err.message}`, 'error');
+                }
+            },
+            error(err) {
+                document.getElementById('processBtn').disabled = false;
+                setStatus(`Error reading file: ${err.message}`, 'error');
+            },
+        });
+    }
+
+    /**
+     * Triggers a browser download of the filtered data as a pipe-delimited CSV.
+     *
+     * @param {Array<{date: Date, note: string}>} data - Filtered entries to export.
+     */
+    function downloadCSV(data) {
+        const rows = data.map(({ date, note }) => {
+            const dateStr = date.toISOString().slice(0, 10);
+            const noteStr = note.replace(/\n/g, ' ');
+            return `${dateStr}|${noteStr}`;
+        });
+
+        const content = 'date|note\n' + rows.join('\n');
+        const blob = new Blob([content], { type: 'text/csv;charset=utf-8;' });
+
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(blob);
+        link.download = 'filtered_daylio.csv';
+        link.click();
+        URL.revokeObjectURL(link.href);
+    }
 </script>
 
 </body>
